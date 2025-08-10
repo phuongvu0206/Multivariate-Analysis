@@ -1,0 +1,525 @@
+---
+title: "Phân tích MANOVA cho Bộ dữ liệu NFL 2014"
+author: "Vũ Ngọc Phương"
+date: "`r Sys.Date()`"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: cosmo
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1. Giới thiệu
+
+## 1.1. Tổng quan Bộ dữ liệu
+
+Bộ dữ liệu **NFL 2014.csv** là một tập dữ liệu thực nghiệm trong sách "Thống kê Nhiều chiều" - Nguyễn Thị Mộng Ngọc và đồng nghiệp tạo ra từ thông tin NFL Draft 2014 để nghiên cứu ảnh hưởng của vị trí trên sân và trường đại học đến các chỉ số thể chất như chiều cao (Height), cân nặng (Weight), chiều dài cánh tay (ArmLen) và chiều dài bàn tay (HandLen). Trong đó:
+
+-   Mỗi quan trắc là một cầu thủ duy nhất
+-   Mỗi cầu thủ chỉ thuộc một trường đại học và chơi ở một vị trí duy nhất trên sân (bộ dữ liệu chỉ thu thập vị trí DB và WO)
+
+Bộ dữ liệu **NFL 2014.csv** được xây dựng nhằm phục vụ mục tiêu giảng dạy và thực hành phân tích thống kê đa biến. Dữ liệu được trích từ cuốn Thống kê nhiều chiều của Tiến sĩ Nguyễn Thị Mộng Ngọc và cộng sự (2025), và phản ánh các thông tin thực tế liên quan đến kỳ tuyển chọn cầu thủ NFL Draft năm 2014.
+
+Mỗi quan sát trong bộ dữ liệu tương ứng với một cầu thủ duy nhất, kèm theo các thông tin về trường đại học nơi cầu thủ theo học và vị trí thi đấu (chỉ bao gồm hai vị trí: Defensive Back - DB và Wide Receiver - WO). Bộ dữ liệu hướng tới việc phân tích ảnh hưởng của yếu tố `College` và `Position` tới các chỉ số thể chất bao gồm: chiều cao (`Height`), cân nặng (`Weight`), chiều dài cánh tay (`ArmLen`) và chiều dài bàn tay (`HandLen`).
+
+### 1.1.1. Nguồn dữ liệu
+
+Bộ dữ liệu được trích từ tài liệu:
+
+Nguyễn Thị Mộng Ngọc, Đinh Ngọc Thanh và Đặng Đức Trọng (2025), Thống kê nhiều chiều, NXB Đại học Quốc gia TP.HCM. ISBN: 978-632-608-084-1. https://vnuhcmpress.edu.vn/Thong-ke-nhieu-chieu-b42032.html
+
+### 1.1.2. Thông số cơ bản
+
+-   **Số mẫu:** 87 (cầu thủ)\
+-   **Số đặc trưng:** 7 (trong đó có 3 biến độc lập và 4 biến phụ
+    thuộc)\
+-   **Biến phụ thuộc:** `Height`, `Weight`, `ArmLen` và `HandLen`\
+-   **Biến giải thích:** `Player` (Tên cầu thủ), `College` (Đại học) và `Position` (Vị trí trên sân)
+
+### 1.1.3. Mô tả đặc trưng
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+library(tibble)
+library(knitr)
+
+bees_info <- tribble(
+  ~Biến, ~"Loại biến", ~"Mô tả",
+  "Player", "factor", "Tên cầu thủ",
+  "College", "factor", "Đại học mà cầu thủ theo học",
+  "Position", "factor", "Vị trí thi đấu: DB (Defensive Back), WO (Wide Receiver)",
+  "Height", "numeric", "Chiều cao (inch)",
+  "Weight", "numeric", "Cân nặng (pound)",
+  "ArmLen", "numeric", "Chiều dài cánh tay (inch)",
+  "HandLen", "numeric", "Chiều dài bàn tay (inch)"
+)
+
+kable(bees_info, caption = "Bảng mô tả các biến trong bộ dữ liệu NFL 2014", align = "lcl")
+```
+
+## 1.2. Mục tiêu
+
+Mục tiêu chính của phân tích là đánh giá xem các yếu tố như trường đại học (`College`) và vị trí thi đấu (`Position`) có ảnh hưởng đến các chỉ số thể chất của cầu thủ (bao gồm `Height`, `Weight`, `ArmLen` và `HandLen`) hay không.
+
+# 2. Chuẩn bị dữ liệu và thư viện cần thiết
+
+```{r libraries, message=FALSE, warning=FALSE}
+library(knitr)
+library(kableExtra)
+library(rstatix)
+library(tidyr)
+library(dplyr)
+library(ggpubr)
+library(MVN)
+library(GGally)
+library(car)
+library("heplots")
+library(MANOVA.RM)
+
+library(tidyverse)
+# Set plotting theme
+theme_set(theme_minimal())
+```
+
+```{r loading-data}
+path = "NFL 2014.csv"
+data = read.csv(path)
+
+# Một vài mẫu dữ liệu
+kable(head(data), format = "html", caption = "Bảng dữ liệu mẫu") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+# 3. Tìm hiểu dữ liệu
+
+## 3.1. Phân tích các nhóm dữ liệu
+
+```{r}
+# Số chiều dữ liệu (cũng là số cầu thủ và số tên cầu thủ "Player")
+dim(data)
+
+# Số lượng cầu thủ trong các trường đại học
+data %>% count(College, sort = TRUE)
+
+# Số lượng cầu thủ trong các vị trí thi đấu
+data %>% count(Position, sort = TRUE)
+```
+
+**Nhận xét:**
+
+-   Biến `Player` là tên của từng cầu thủ, gần như định danh cho mỗi cầu thủ nên không thể gom nhóm hoặc làm nhân tố để phân tích MANOVA.
+-   Biến `College` có quá nhiều trường đại học, trong đó mỗi đại học chỉ có nhiều nhất là 3 cầu thủ (ít hơn cả số biến phụ thuộc là 4). Vì vậy, biến `College` hiện tại không phù hợp để làm nhân tố khi phân tích MANOVA.
+-   Biến `Position` chỉ có 2 nhóm là DB và WO, trong đó số lượng mẫu mỗi nhóm là gần bằng nhau và lớn hơn nhiều so với số biến phụ thuộc là 4. Vì vậy, biến `Position` phù hợp để làm nhân tố khi phân tích MANOVA.
+
+**Cách xử lý:**
+
+Để phân tích MANOVA được hiệu quả, ta sẽ thực hiện:
+
+-   Không sử dụng biến `Player` và `College` trong phân tích MANOVA.
+-   Từ biến `College` ta gom nhóm các trường đại học thành nhóm lớn hơn và đặt là `CollegeGroup`. Cách gom nhóm có thể dựa vào ý nghĩa, phân phối... nhưng ở đây ta sẽ gom nhóm theo các trường nằm trong Power Five (viết tắt là P5).*
+-   Giữ nguyên biến `Position`.
+
+
+**Chú thích:** Trong bối cảnh bóng bầu dục đại học Mỹ, Power Five là thuật ngữ chỉ nhóm năm hội nghị thể thao hàng đầu thuộc NCAA Division I, bao gồm: ACC, Big Ten, Big 12, Pac-12 và SEC. Các trường thuộc nhóm này thường có chương trình thể thao phát triển, đào tạo cầu thủ chất lượng và là nguồn cung ứng chính cho NFL. Việc phân nhóm theo Power Five có thể giúp làm rõ sự khác biệt giữa các trường đại học có truyền thống thể thao mạnh và các trường còn lại trong phân tích thống kê.
+
+```{r}
+# Hàm phân loại trường đại học thành các nhóm
+classify_college = function(college) {
+  # Danh sách các trường Power Five (P5)
+  p5 = c("Alabama", "Auburn", "Baylor", "Clemson", "Duke", "Florida", "Florida St.",
+          "Georgia Tech", "LSU", "Louisville", "Miami", "Michigan", "Michigan St.",
+          "Missouri", "Nebraska", "North Carolina", "N.C. State", "Northwestern",
+          "Ohio St.", "Oklahoma", "Oklahoma St.", "Oregon", "Oregon St.", "Penn St.",
+          "Pittsburgh", "Purdue", "Rutgers", "South Carolina", "TCU", "Texas",
+          "Texas A&M", "USC", "Utah", "Vanderbilt", "Virginia Tech", "Wake Forest",
+          "Wisconsin", "UCLA", "Colorado")
+  
+  if (college %in% p5) {
+    return("P5")
+  } else {
+    return("Non-P5")
+  }
+}
+
+# Thêm cột CollegeGroup vào dataframe
+data$CollegeGroup = sapply(data$College, classify_college)
+
+# Chuyển đổi CollegeGroup thành factor
+data$CollegeGroup = factor(data$CollegeGroup, levels = c("P5", "Non-P5"))
+
+# Kiểm tra số lượng mỗi nhóm
+group_counts = table(data$CollegeGroup)
+print(group_counts)
+```
+
+## 3.2. Kiểm tra dữ liệu khuyết
+
+```{r}
+# Kiểm tra số lượng giá trị khuyết theo từng biến:
+colSums(is.na(data))
+```
+
+Dữ liệu không bị khuyết bất kỳ giá trị nào nên ta sẽ không cần phải xử
+lý dữ liệu khuyết.
+
+## 3.3. Kiểm tra giá trị ngoại lai
+
+```{r}
+# Tạo biến dữ liệu số để kiểm tra giá trị ngoại lai
+data_nfl = data %>% select(-Player, -College, -CollegeGroup, -Position)
+
+# Gán rowid để theo dõi dòng
+data_with_id = data %>%
+  mutate(rowid = row_number())
+
+# Kiểm tra outlier
+# Xác định outlier đơn biến
+univ_outliers = list()
+
+for (i in names(data_nfl)) {
+  (out = data_with_id %>%
+    identify_outliers(all_of(i)) %>%
+    filter(is.extreme == TRUE) %>%
+    select(rowid))
+  
+  if (nrow(out) > 0) {
+    univ_outliers[[i]] = out
+  }
+}
+
+# Lưu lại các id là extreme outlier (1 chiều)
+univ_extremes = bind_rows(univ_outliers) %>% distinct()
+
+# In ra các quan trắc là extreme outlier (1 chiều)
+(outlier_rows = data_with_id %>%
+  filter(rowid %in% univ_extremes$rowid))
+```
+
+```{r}
+# Outlier đa biến tổng thể
+multi_extremes = data_with_id %>%
+  select(-Player, -College, -CollegeGroup, -Position)  %>%
+  mahalanobis_distance() %>%
+  filter(is.outlier == TRUE) %>%
+  select(rowid) 
+
+# In ra các quan trắc là extreme outlier (nhiều chiều)
+(outlier_rows = data_with_id %>%
+  filter(rowid %in% multi_extremes$rowid))
+
+# Outlier đa biến theo các nhóm CollegeGroup
+data %>% group_by(CollegeGroup) %>% mahalanobis_distance() %>%
+  filter(is.outlier == TRUE) %>% as.data.frame()
+
+# Outlier đa biến theo các nhóm Position
+data %>% group_by(Position) %>% mahalanobis_distance() %>%
+  filter(is.outlier == TRUE) %>% as.data.frame()
+```
+
+**Nhận xét:**
+
+-   Không có giá trị ngoại lai cực đoan (extreme outlier) 1 chiều nào
+    trong biến `Height`, `ArmLen`, `Weight` và `HandLen`, nên ta không
+    cần loại bỏ.
+-   Không có outlier nhiều chiều trong bộ dữ liệu, tính theo khoảng cách
+    Mahalanobis.
+
+=\> Như vậy, không cần xử lý giá trị ngoại lai và có thể bắt đầu phân
+tích MANOVA.
+
+# 4. Phân tích MANOVA
+
+## 4.1. Đặt giả thuyết:
+
+Bảng MANOVA kiểm định sự ảnh hưởng của nhân tố `CollegeGroup` và
+`Position` lên vector phụ thuộc, với các giả thuyết:
+
+------------------------------------------------------------------------
+
+Với bài toán kiểm định giả thuyết không có tác động từ nhân tố
+`CollegeGroup`:
+
+$$
+\left\{
+\begin{aligned}
+H_0\!:&\quad \boldsymbol{\tau}_1 = \boldsymbol{\tau}_2 = \mathbf{0} \quad &&\text{(Nhân tố CollegeGroup không ảnh hưởng lên vector phụ thuộc)} \\
+H_1\!:&\quad \exists\, \boldsymbol{\tau}_\ell \ne \mathbf{0} \quad &&\text{(Nhân tố CollegeGroup có ảnh hưởng lên vector phụ thuộc)}
+\end{aligned}
+\right.
+$$
+
+Trong đó:\
+$\boldsymbol{\tau}_1, \boldsymbol{\tau}_2$ lần lượt là sai khác của
+vector trung bình của nhóm P5 và nhóm Non-P5 so với vector trung bình
+tổng thể.
+
+------------------------------------------------------------------------
+
+Với bài toán kiểm định giả thuyết không có tác động từ nhân tố
+`Position`:
+
+$$
+\left\{
+\begin{aligned}
+H_0\!:&\quad \boldsymbol{\beta}_1 = \boldsymbol{\beta}_2 = \mathbf{0} \quad &&\text{(Nhân tố Position không ảnh hưởng lên vector phụ thuộc)} \\
+H_1\!:&\quad \exists\, \boldsymbol{\beta}_\ell \ne \mathbf{0} \quad &&\text{(Nhân tố Position có ảnh hưởng lên vector phụ thuộc)}
+\end{aligned}
+\right.
+$$
+
+Trong đó:\
+$\boldsymbol{\beta}_1, \boldsymbol{\beta}_2$ lần lượt là sai khác của
+vector trung bình của nhóm DB và nhóm WO so với vector trung bình tổng
+thể.
+
+------------------------------------------------------------------------
+
+Với bài toán kiểm định tỷ số hợp lý cho giả thuyết "không có tác động từ
+tương tác giữa hai nhân tố `CollegeGroup` và `Position`":
+
+$$
+\left\{
+\begin{aligned}
+H_0\!:&\quad \boldsymbol{\gamma}_{lk} = \mathbf{0} \quad \forall\, l, k \quad &&\text{(Không có tác động từ tương tác giữa CollegeGroup và Position)} \\
+H_1\!:&\quad \exists\, \boldsymbol{\gamma}_{lk} \ne \mathbf{0} \quad &&\text{(Có tác động từ tương tác giữa CollegeGroup và Position)}
+\end{aligned}
+\right.
+$$
+
+Trong đó:\
+$\boldsymbol{\gamma}_{lk}$ là các thành phần tương tác giữa mức $l$ của
+**CollegeGroup** và mức $k$ của **Position**.
+
+## 4.2. Kiểm tra các giả định
+
+#### 1.  Các mẫu ngẫu nhiên lấy từ các tổng thể khác nhau thì độc lập với nhau:
+
+-   Đối với các nhóm của `CollegeGroup` (nhóm các trường đại học):
+    -   Mỗi cầu thủ chỉ thuộc về một trường và một nhóm trường duy nhất, không có trường hợp một cầu thủ đại diện cho nhiều trường hay nhóm trường cùng lúc.
+    -   Và ta giả định các trường đại học là những đơn vị đào tạo độc lập, không can thiệp hay ảnh hưởng trực tiếp đến quá trình huấn luyện và thi đấu của nhau, việc một cầu thủ được chọn từ trường này không làm thay đổi khả năng lựa chọn của các cầu thủ từ trường khác (không có sự phụ thuộc về mặt thống kê giữa các nhóm).
+    
+Do đó, trong khuôn khổ phân tích, ta coi các nhóm cầu thủ từ các trường khác nhau là độc lập với nhau, thỏa mãn giả định độc lập giữa các nhóm của `CollegeGroup`.
+    
+-   Đối với các nhóm của `Position` (vị trí trên sân):
+    -   Mỗi cầu thủ chỉ một vị trí duy nhất, không có trường hợp một cầu thủ đại diện cho nhiều vị trí cùng lúc.
+    -   Việc chọn cầu thủ ở một vị trí không ảnh hưởng đến lựa chọn hoặc đặc điểm của cầu thủ ở vị trí khác, nên không có sự phụ thuộc giữa các nhóm vị trí.
+
+Do đó, có thể xem các nhóm cầu thủ theo từng vị trí là các mẫu ngẫu nhiên độc lập từ các tổng thể khác nhau, và thỏa mãn giả định độc lập giữa các nhóm của `Position`.
+
+#### 2.  Các tổng thể có chung ma trận hiệp phương sai (hay có hiệp phương sai đồng nhất):
+
+```{r}
+# Kiểm tra tính đồng nhất của ma trận hiệp phương sai của các tổng thể với kiểm định Box's M
+box_m(data[, c("Height", "ArmLen", "Weight", "HandLen")], data$CollegeGroup)
+box_m(data[, c("Height", "ArmLen", "Weight", "HandLen")], data$Position)
+```
+
+**Nhận xét:**
+
+Kiểm định Box's M đối với biến:
+
+-   `CollegeGroup`: có p-value = 0.28118 \> 0.05, nên dữ liệu thỏa giả định các ma trận hiệp phương sai tổng thể bằng nhau với mức ý nghĩa 5%.
+-   `Position`: có p-value = 0.00138 \< 0.05, nên dữ liệu `Position` không thỏa giả định các ma trận hiệp phương sai tổng thể bằng nhau với mức ý nghĩa 5%. Tuy nhiên, với mức ý nghĩa alpha = 0.001 thì `Position` sẽ thỏa giả định các ma trận hiệp phương sai tổng thể bằng nhau và đây là một mức ý nghĩa chấp nhận được nên ta coi như dữ liệu đã thỏa giả định này.
+
+#### 3. Mỗi tổng thể đều có phân phối chuẩn nhiều chiều:
+
+```{r 4.10c5}
+# Chuẩn 1 chiều (cho từng biến) : Shapiro-Wilk test
+data %>%
+  group_by(CollegeGroup) %>%
+  shapiro_test(Height, ArmLen, Weight, HandLen) %>%
+  arrange(variable)
+
+data %>%
+  group_by(Position) %>%
+  shapiro_test(Height, ArmLen, Weight, HandLen) %>%
+  arrange(variable)
+```
+**Nhận xét:**
+
+- Với mức ý nghĩa 5%, hầu như tất cả các biến phụ thuộc trong cả 2 nhóm trường đại học trong `CollegeGroup`
+đều tuân theo phân phối chuẩn 1 chiều. Ngoại trừ có biến Height cho
+nhóm các trường thuộc P5 là không tuân theo phân phối chuẩn 1 chiều với mức ý
+nghĩa 5% (vì p-value trong kiểm định Shapiro-Wilk là 0.00498 \< 0.05).
+
+==> Tuy nhiên, nếu ta lấy mức ý nghĩa alpha = 0.001 thì biến Height cho nhóm các trường thuộc P5 có thể coi là tuân theo phân phối chuẩn 1 chiều (vì p-value trong kiểm định Shapiro-Wilk là 0.00498 \> 0.001).
+
+- Với mức ý nghĩa 5%, hầu như tất cả các biến phụ thuộc trong cả 2 vị trí trên sân trong `Position`
+đều tuân theo phân phối chuẩn 1 chiều. Ngoại trừ có biến Height cho
+vị trí DB là không tuân theo phân phối chuẩn 1 chiều với mức ý
+nghĩa 5% (vì p-value trong kiểm định Shapiro-Wilk là 0.00534 \< 0.05).
+
+==> Tuy nhiên, nếu ta lấy mức ý nghĩa alpha = 0.001 thì biến Height cho vị trí DB có thể coi là tuân theo phân phối chuẩn 1 chiều (vì p-value trong kiểm định Shapiro-Wilk là 0.00534 \> 0.001).
+
+```{r 4.10c6}
+# Chuẩn nhiều chiều
+data %>%
+  group_by(CollegeGroup) %>%
+  select(Height, ArmLen, Weight, HandLen) %>%
+  group_modify(~ mshapiro_test(.x))
+
+data %>%
+  group_by(Position) %>%
+  select(Height, ArmLen, Weight, HandLen) %>%
+  group_modify(~ mshapiro_test(.x))
+```
+**Nhận xét:**
+
+-   Xét biến `CollegeGroup`:
+    -   Với mức ý nghĩa 5%, nhóm các trường đại học thuộc P5 có phân phối chuẩn nhiều chiều (vì p-value trong kiểm định là 0.27024 \> 0.05).
+    -   Với mức ý nghĩa 5%, nhóm các trường đại học thuộc không thuộc P5 không có phân phối chuẩn nhiều chiều (vì p-value trong kiểm định là 0.01839 \> 0.05). Tuy nhiên, nếu ta lấy mức ý nghĩa alpha = 0.01 thì  nhóm các trường đại học thuộc không thuộc P5 có thể coi là tuân theo phân phối chuẩn nhiều chiều (vì p-value trong kiểm định là 0.01839 \> 0.01).
+    
+-   Xét biến `Position`:
+    -   Với mức ý nghĩa 5%, vị trí DB tuân theo phân phối chuẩn nhiều chiều (vì p-value trong kiểm định là 0.08279 \> 0.05).
+    -   Với mức ý nghĩa 5%, vị trí WO không tuân theo phân phối chuẩn nhiều chiều (vì p-value trong kiểm định là 0.00074 \> 0.05). Tuy nhiên, nếu ta lấy mức ý nghĩa alpha = 0.0005 (một mức ý nghĩa tạm chấp nhận được) thì vị trí WO có thể coi là tuân theo phân phối chuẩn nhiều chiều (vì p-value trong kiểm định là 0.00074 \> 0.0005).
+
+=\> Như vậy, dữ liệu coi như thỏa tính chuẩn nhiều chiều với mức ý nghĩa
+0.05 (5%) nhưng thỏa với mức ý nghĩa 0.0005 nên ta coi như có thể xấp xỉ
+về phân phối chuẩn nhiều chiều được. Từ đó, coi như thỏa giả định về
+tính chuẩn nhiều chiều của dữ liệu.
+
+
+**Kết luận: Cả 3 điều kiện để sử dụng MANOVA đều thỏa với dữ liệu này.**
+
+## 4.3. Thành lập bảng MANOVA hai nhân tố, với mức ý nghĩa alpha = 0.05
+
+Bảng MANOVA kiểm định sự ảnh hưởng của hai nhân tố `CollegeGroup` và `Position` lên vector phụ
+thuộc, với giả thuyết trong phần 4.1. là:
+
+```{r}
+fit = manova(cbind(Height, ArmLen, Weight, HandLen) ~ CollegeGroup*Position, data=data)
+summary(fit, test = "Wilks")
+```
+**Nhận xét:**
+
+Từ bảng MANOVA, với mức ý nghĩa alpha = 0.05:
+
+-   Kiểm định sự ảnh hưởng của nhân tố `CollegeGroup` lên vector phụ thuộc: ta thấy p-value = 0.78113 > 0.05 (giá trị thống kê = 0.4375 < $F_{4,80}^{5\%}$ = 2.51) nên ta **không đủ cơ sở để bác bỏ giả thuyết** $H_0: \quad \boldsymbol{\tau}_1 = \boldsymbol{\tau}_2 = \mathbf{0}$ (Nhân tố `CollegeGroup` không ảnh hưởng lên vector phụ thuộc). Nghĩa là **nhân tố `CollegeGroup` không ảnh hưởng lên vector phụ thuộc mà ta đang xét**.
+-   Kiểm định sự ảnh hưởng của nhân tố `Position` lên vector phụ thuộc: ta thấy p-value = 0.01106 < 0.05 (giá trị thống kê = 3.4957 > $F_{4,80}^{5\%}$ = 2.51) nên ta **bác bỏ giả thuyết** $H_0: \quad \boldsymbol{\beta}_1 = \boldsymbol{\beta}_2 = \mathbf{0}$ (Nhân tố `Position` không ảnh hưởng lên vector phụ thuộc). Nghĩa là **nhân tố `Position` có ảnh hưởng đến vector phụ thuộc mà ta đang xét**.
+-   Kiểm định sự ảnh hưởng từ tương tác giữa hai nhân tố `CollegeGroup` và `Position` lên vector phụ thuộc: ta thấy p-value = 0.60651 > 0.05 (giá trị thống kê = 0.6819 < $F_{4,80}^{5\%}$ = 2.51) nên ta **không đủ cơ sở để bác bỏ giả thuyết** $H_0: \quad \boldsymbol{\gamma}_{lk} = \mathbf{0} \quad \forall\, l, k$ (Không có tác động từ tương tác giữa `CollegeGroup` và `Position`). Nghĩa là **không có tác động từ sự tương tác giữa hai nhân tố `CollegeGroup` và `Position` đến vector phụ thuộc mà ta đang xét**.
+
+## 4.4. Tổ hợp tuyến tính của các trung bình thành phần có ý nghĩa quan trọng trong việc bác bỏ $H_0$
+
+**Muốn tìm tổ hợp tuyến tính của các trung bình thành phần có ý nghĩa quan trọng trong việc bác bỏ $H_0$, ta dựa vào định lý sau:**
+
+Với vector hệ số $\mathbf{a} \in \mathbb{R}^p$,
+
+$$max_{\mathbf{a}} t^2 = max_{\mathbf{a}} \frac{n(\mathbf{a}'(\mathbf{\bar{x}} - μ))^2}{ \mathbf{a}'\mathbf{S}\mathbf{a}} = n(\mathbf{\bar{x}} - \mu)' \mathbf{S}^{-1} (\mathbf{\bar{x}} - \mu) = T^2$$
+Đẳng thức đạt được khi $\mathbf{a}$ cùng phương với $\mathbf{S}^{-1} (\mathbf{\bar{x}} - \mu)$. Suy ra,
+
+$$\mathbf{a} \propto \mathbf{S}^{-1} (\mathbf{\bar{x}} - \mu)$$
+
+Đối với 2 vector trung bình tổng thể, ta thay $\mathbf{S}$ bằng $\mathbf{S}_{pooled}$:
+
+$$\mathbf{a} \propto \mathbf{S}_{pooled}^{-1} (\mathbf{\bar{x}} - \mu)$$
+$$\Rightarrow \mathbf{a} \propto \mathbf{S}_{pooled}^{-1} (\mathbf{\bar{x}}_1 - \mathbf{\bar{x}}_2)$$
+Trong đó:
+
+- \( \bar{\mathbf{x}}_1 \), \( \bar{\mathbf{x}}_2 \) là các vector trung bình mẫu của hai nhóm (đực và cái),
+
+- $ \mathbf{S}_{\text{pooled}} = \left( \frac{n_1 - 1}{n_1 + n_2 - 2} \mathbf{S}_1 + \frac{n_2 - 1}{n_1 + n_2 - 2} \mathbf{S}_2 \right)^{-1} $ là ma trận hiệp phương sai gộp (pooled covariance matrix).
+
+- Vector $a$ này xác định tổ hợp tuyến tính $a'X$, tổ hợp tuyến tính chịu
+trách nhiệm lớn nhất cho việc bác bỏ $H_0$ là: $Z = a'X$
+
+**Áp dụng cho bộ dữ liệu hiện tại, vì nhân tố `Position` có ảnh hưởng đến vector phụ thuộc nên ta sẽ tìm tổ hợp tuyến tính của các trung bình thành phần có ý nghĩa quan trọng trong việc bác bỏ $H_0$ của nhân tố `Position`.**
+
+```{r}
+X_1 = data %>% filter(Position == "DB") %>% select(-Player, -College, -CollegeGroup, -Position)
+X_2 = data %>% filter(Position == "WO") %>% select(-Player, -College, -CollegeGroup, -Position)
+n_1 = nrow(X_1)
+n_2 = nrow(X_2)
+
+# Tính các trung bình mẫu
+X_bar = colMeans(data_nfl)
+X_bar_1 = colMeans(X_1)
+X_bar_2 = colMeans(X_2)
+
+# Tính các ma trận hiệp phương sai mẫu
+S_1 = cov(X_1)
+S_2 = cov(X_2)
+
+# Tính vector hệ số của tổ hợp tuyến tính của các trung bình thành phần có ý nghĩa quan trọng trong việc bác bỏ H0
+S_pooled = ((n_1 - 1)/(n_1 + n_2 - 2)) * S_1 + ((n_2 - 1)/(n_1 + n_2 - 2)) * S_2
+S_pooled_inv = solve(S_pooled)
+a = S_pooled_inv %*% (X_bar_1 - X_bar_2)
+
+# Vector hệ số của tổ hợp tuyến tính của các trung bình thành phần có ý nghĩa quan trọng trong việc bác bỏ H0 tỉ lệ với:
+print(a)
+```
+
+Độ lớn của trị tuyệt đối hệ số của biến nào càng cao thì biến đó càng có ý nghĩa quan trọng trong việc bác bỏ $H_0$.
+
+Như vậy, tổ hợp tuyến tính chịu trách nhiệm lớn nhất cho việc bác bỏ $H_0$ là $a'X$. Hay ta có thể tạm ghi là
+$$Z = a'X = - 0.35403510 \cdot Height + 0.05243558 \cdot ArmLen + 0.01435271 \cdot Weight - 1.15343480 \cdot HandLen$$
+
+Trong đó, biến `HandLen` có ý nghĩa quan trọng nhất trong việc bác bỏ $H_0$ (vì có độ lớn hệ số lớn nhất 1.15343480 > 0.35403510 > 0.05243558 > 0.01435271).
+
+## 4.5. Phân tích hậu kiểm (ANOVA riêng lẻ cho từng biến phụ thuộc)
+
+```{r}
+with(data, summary(aov(Height ~ CollegeGroup * Position)))
+with(data, summary(aov(ArmLen ~ CollegeGroup * Position)))
+with(data, summary(aov(Weight ~ CollegeGroup * Position)))
+with(data, summary(aov(HandLen ~ CollegeGroup * Position)))
+```
+**Cách ngắn gọn hơn nếu không cần phân tích chi tiết:**
+
+```{r}
+data %>%
+  gather(key = "variable", value = "value", Height, ArmLen, Weight, HandLen) %>%
+  group_by(variable) %>% 
+  anova_test(value ~ CollegeGroup*Position)
+```
+**Nhận xét:**
+
+Từ các bảng ANOVA 2 nhân tố cho từng biến phụ thuộc, với mức ý nghĩa 5%, ta thấy:
+
+-   Không có sự tác động từ nhân tố `CollegeGroup` và từ tương tác giữa hai nhân tố lên tất cả các biến phụ thuộc (`Height`, `ArmLen`, `Weight`, `HandLen`) vì tất cả các p-value tương ứng đều lớn hơn alpha = 0.05.
+-   Có sự ảnh hưởng của nhân tố `Position` lên tất cả các biến phụ thuộc (`Height`, `ArmLen`, `Weight`, `HandLen`) vì tất cả các p-value tương ứng đều nhỏ hơn alpha = 0.05.
+
+## 4.6. So sánh trung bình các nhóm theo từng đôi một (Post-hoc Pairwise Comparision) bằng kiểm định Tukey
+
+```{r}
+data %>%
+  gather(key = "variables", value = "value", Height, ArmLen, Weight, HandLen) %>%
+  group_by(variables) %>%
+  games_howell_test(value ~ CollegeGroup) %>%
+  select(-estimate, -conf.low, -conf.high) # Remove details
+
+data %>%
+  gather(key = "variables", value = "value", Height, ArmLen, Weight, HandLen) %>%
+  group_by(variables) %>%
+  games_howell_test(value ~ Position) %>%
+  select(-estimate, -conf.low, -conf.high)
+```
+
+**Nhận xét:**
+
+Do cả 2 nhân tố ta đang xét đều chỉ có 2 bậc (level) nên các kết luận không có thêm thông tin mới so với phần 4.4. Tuy nhiên, để phần phân tích được hoàn chỉnh, ta vẫn sẽ phân tích ý nghĩa của các kết quả trên.
+
+Từ các so sánh theo cặp giữa các nhóm thời kỳ, với mức ý nghĩa 5%, ta thấy:
+
+-   Trong so sánh theo cặp giữa 2 nhóm trong `CollegeGroup` ("P5" và "Non-P5"), không có sự khác biệt có ý nghĩa thống kê đối với từng biến phụ thuộc (`Height`, `ArmLen`, `Weight`, `HandLen`) vì tất cả các p-value tương ứng đều lớn hơn 0.05.
+-   Trong so sánh theo cặp giữa 2 nhóm trong `Position` ("DB" và "WO"), có sự khác biệt có ý nghĩa thống kê đối với từng biến phụ thuộc (`Height`, `ArmLen`, `Weight`, `HandLen`) vì tất cả các p-value tương ứng đều nhỏ hơn 0.05.
+
+# 5. Kết luận
+
+Dựa trên các mục tiêu đặt ra, phân tích MANOVA trên bộ dữ liệu NFL 2014 mang lại các kết quả chính như sau:
+
+-   **Chỉ có nhân tố vị trí thi đấu (`Position`) có ảnh hưởng có ý nghĩa thống kê đến vector các biến phụ thuộc `Height`, `ArmLen`, `Weight` và `HandLen`**. Nghĩa là, các vị trí thi đấu khác nhau thì có trung bình các chỉ số thể chất như chiều cao (Height), cân nặng (Weight), chiều dài cánh tay (ArmLen) và chiều dài bàn tay (HandLen) khác nhau. 
+
+-   **Nhân tố nhóm trường đại học (`CollegeGroup`) và tương tác giữa hai nhân tố `CollegeGroup` và `Position` không có ảnh hưởng có ý nghĩa thống kê đến vector các biến phụ thuộc `Height`, `ArmLen`, `Weight` và `HandLen`**.
+
+-   **Biến `HandLen` là biến có ý nghĩa quan trọng nhất** trong việc làm nhân tố vị trí thi đấu (`Position`) có ảnh hưởng có ý nghĩa thống kê đến vector phụ thuộc. 
+
+-   **Phân tích hậu kiểm bổ sung bằng ANOVA 2 nhân tố đơn biến và kiểm định Tukey cho từng cặp nhóm** cho thấy **vị trí thi đấu (`Position`) có ảnh hưởng mạnh và rõ rệt đến các biến phụ thuộc**, trong khi nhân tố **nhóm trường đại học (`CollegeGroup`) và tương tác giữa hai yếu tố lại không có ý nghĩa thống kê ở bất kỳ biến phụ thuộc nào**.
+
+Những kết quả này cho thấy trong bộ dữ liệu này, cấu trúc hình thể của vận động viên NFL chỉ phụ thuộc vào vai trò thi đấu trên sân chứ không phụ thuộc vào trường đại học mà cầu thủ được huấn luyện. Đây có thể là cơ sở để các nhà tuyển trạch và huấn luyện viên cân nhắc chỉ số hình thể phù hợp cho từng vị trí thi đấu mà không cần lo sợ có sự khác biệt đáng kể giữa các nhóm trường đại học với nhau khi xây dựng đội hình hoặc phát triển chiến lược huấn luyện.

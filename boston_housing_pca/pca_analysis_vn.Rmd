@@ -1,0 +1,895 @@
+---
+title: "Phân tích Thành phần chính cho Bộ dữ liệu Boston Housing"
+author: "Vũ Ngọc Phương"
+output: html_document
+date: "`r Sys.Date()`"
+editor_options: 
+  markdown: 
+    wrap: 72
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: cosmo
+---
+
+# 1. Giới thiệu
+
+## 1.1. Tổng quan Bộ dữ liệu
+
+Bộ dữ liệu Boston Housing chứa thông tin về các đặc điểm kinh tế, xã hội
+và môi trường của 506 khu dân cư tại thành phố Boston, Hoa Kỳ. Dữ liệu
+ban đầu được thu thập và công bố bởi Cơ quan Thống kê Nhà đất Boston và
+sau đó được sử dụng trong nhiều nghiên cứu học máy, bao gồm cả hồi quy
+tuyến tính và PCA.
+
+### 1.1.1. Nguồn dữ liệu
+
+[UCI Machine Learning Repository: Boston Housing Data
+Set](https://github.com/rupakc/UCI-Data-Analysis/tree/master/Boston%20Housing%20Dataset/Boston%20Housing)
+
+### 1.1.2. Thông số cơ bản
+
+-   **Số mẫu:** 506 (khu dân cư)
+-   **Số đặc trưng:** 13 (biến định lượng và thứ tự)
+-   **Biến mục tiêu:** `MEDV` – Giá trị trung vị của nhà ở (nghìn USD)
+
+### 1.1.3. Mô tả đặc trưng
+
+13 đặc trưng được thu thập từ các nguồn thống kê và điều tra dân cư địa
+phương:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+library(tibble)
+library(knitr)
+
+variable_info <- tribble(
+  ~Biến, ~"Loại biến", ~"Mô tả",
+  "CRIM", "numeric", "Tỷ lệ tội phạm bình quân đầu người theo khu vực",
+  "ZN", "numeric", "Tỷ lệ đất ở dành cho khu dân cư quy hoạch (>25,000 ft²)",
+  "INDUS", "numeric", "Tỷ lệ diện tích đất phi bán lẻ (non-retail) trên tổng diện tích đất theo khu - Tạm gọi là tỷ lệ diện tích đất công nghiệp",
+  "CHAS", "binary", "Giáp sông Charles (1 = có, 0 = không)",
+  "NOX", "numeric", "Nồng độ khí nitric oxit (phần triệu) - Tạm gọi là Độ ô nhiễm",
+  "RM", "numeric", "Số lượng phòng trung bình mỗi căn nhà",
+  "AGE", "numeric", "Tỷ lệ nhà thuộc sở hữu xây trước năm 1940",
+  "DIS", "numeric", "Khoảng cách trọng số đến 5 trung tâm việc làm ở Boston",
+  "RAD", "integer", "Chỉ số khả năng tiếp cận đường cao tốc tới trung tâm",
+  "TAX", "numeric", "Thuế tài sản tính trên mỗi $10,000 giá trị bất động sản",
+  "PTRATIO", "numeric", "Tỷ lệ học sinh trên giáo viên theo khu vực",
+  "B", "numeric", "Chỉ số liên quan đến tỷ lệ người da màu trong khu vực",
+  "LSTAT", "numeric", "Tỷ lệ dân số thuộc tầng lớp thu nhập thấp",
+  "MEDV", "numeric", "Giá trị trung vị của nhà (nghìn USD) — biến mục tiêu"
+)
+
+kable(variable_info, caption = "Bảng mô tả các biến trong bộ dữ liệu Boston Housing", align = "lcl")
+```
+
+## 1.2. Mục tiêu
+
+-   Kiểm tra và xử lý dữ liệu sao cho không bị khuyết, không có extreme
+    outlier để tránh làm lệch phân tích thành phần chính
+-   Giảm chiều dữ liệu từ 13 biến xuống còn 2-4 biến thành phần chính
+-   Giữ lại \>70% phương sai dữ liệu
+-   Chia biến mục tiêu thành các nhóm giá nhà thấp, vừa và cao để phân
+    tích
+-   Trực quan hóa phân cụm tự nhiên giữa các nhóm giá nhà
+-   Xác định các đặc trưng quan trọng nhất trong chẩn đoán nhóm giá nhà
+
+# 2. Chuẩn bị dữ liệu và thư viện cần thiết
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(knitr)
+library(kableExtra)
+library(FactoMineR)
+library(ggplot2)
+library(ggrepel)
+library(factoextra)  # để dùng get_pca_var()
+library(corrplot)
+library(GGally)
+library(rstatix)
+library(dplyr)
+suppressPackageStartupMessages(library(car))
+```
+
+```{r}
+data = read.table("housing.data", header = FALSE)
+colnames(data) = c("CRIM", "ZN", "INDUS", "CHAS", "NOX", "RM", "AGE", "DIS", "RAD", "TAX", "PTRATIO", "B", "LSTAT", "MEDV")
+
+# Một vài mẫu dữ liệu
+kable(head(data), format = "html", caption = "Bảng dữ liệu mẫu") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+# 3. Tìm hiểu dữ liệu
+
+## 3.1. Phân tích tổng quan
+
+```{r}
+# Số quan trắc và số chiều của dữ liệu
+dim(data)
+```
+
+```{r}
+# Thống kê mô tả cơ bản của dữ liệu
+summary(data)
+```
+
+```{r}
+# Kiểm tra phân bố lớp CHAS
+chas_distribution = table(data$CHAS)
+print(chas_distribution)
+```
+
+Trong bước này, ta sẽ tạm loại bỏ hai biến `CHAS` và `MEDV` khỏi bộ dữ
+liệu vì các lý do sau:
+
+-   **Biến `CHAS`**: Đây là một biến nhị phân, đại diện cho việc một khu
+    vực có giáp sông Charles River hay không. Tuy nhiên, biến này có sự
+    mất cân bằng nghiêm trọng (đa số là giá trị 0), điều này có thể gây
+    sai lệch khi:
+    -   Tính toán phương sai trong phân tích thành phần chính (PCA).
+    -   Tính khoảng cách trong các phương pháp phát hiện ngoại lai
+        (outlier detection), đặc biệt là khi sử dụng khoảng cách
+        Euclidean.
+-   **Biến `MEDV`**: Là biến mục tiêu đại diện cho giá trị trung vị của
+    nhà ở (đơn vị: nghìn USD). Việc giữ lại biến này trong quá trình
+    giảm chiều (PCA, t-SNE, ...) sẽ dẫn đến rò rỉ thông tin (data
+    leakage), làm sai lệch kết quả phân tích hoặc ảnh hưởng đến hiệu quả
+    của các mô hình dự đoán. Do đó, `MEDV` cần được loại trừ để đảm bảo
+    tính khách quan khi đánh giá mối liên hệ giữa các thành phần chính
+    và các biến đầu vào.
+
+==\> Ta sẽ dùng chúng sau khi thực hiện PCA.
+
+```{r}
+data_housing = data %>% select(-CHAS, -MEDV)
+
+# Đồ thị Boxplot
+boxplot(data_housing, las = 2)
+```
+
+```{r}
+corrplot(cor(data_housing), method = "color")
+```
+
+**Nhận xét:**
+
+-   Bộ dữ liệu có 506 quan trắc với 14 biến, trong đó có biến `MEDV` là
+    biến mục tiêu.
+
+-   Ta tạm loại bỏ hai biến `CHAS` và `MEDV` để phân tích PCA.
+
+-   Từ thống kê mô tả và boxplot, ta thấy các biến thuộc nhiều khoảng
+    giá trị khác nhau (có những cách biệt rất lớn), đồng thời tiềm năng
+    tồn tại nhiều giá trị ngoại lai. Điều này sẽ ảnh hưởng rất lớn tới
+    phương sai của dữ liệu khi phân tích thành phần chính nếu không được
+    xử lý (vì PCA tính toán dựa trên phương sai).
+
+-   Từ biểu đồ heatmap, ta thấy một vài biến có tương quan cao như:
+
+    -   `TAX` (Thuế bất động sản) và `RAD` (Khả năng tiếp cận cao tốc)
+        có tương quan dương cao. Điều này hợp lý với thực tế vì các khu
+        vực càng gần nhiều tuyến đường cao tốc xuyên tâm (`RAD` cao)
+        thường có hạ tầng giao thông phát triển, dễ tiếp cận trung tâm
+        hơn và có mức đầu tư lớn, dẫn đến thuế bất động sản (`TAX`) cao
+        hơn để bù chi phí hạ tầng.
+    -   `DIS` (Khoảng cách tới trung tâm làm việc) và `AGE` (Tỉ lệ nhà
+        cổ) có tương quan âm cao. Điều này cho thấy càng xa trung tâm
+        (`DIS` cao) thì nhà càng mới (`AGE` thấp), như vậy quá trình đô
+        thị hóa lan dần từ trung tâm ra ngoại ô.
+    -   `DIS` (Khoảng cách tới trung tâm làm việc) và `NOX` (Độ ô nhiễm)
+        có tương quan âm cao. Điều này cũng sát với thực tế khi các khu
+        vực xa trung tâm (thường là khu dân cư hoặc vùng ven đô) sẽ có
+        ít khí thải NO hơn vì mật độ xe cộ, khí thải thường thấp hơn.
+
+    Các biến tương quan cao sẽ gây ra đa cộng tuyến khi sử dụng mô hình
+    Hồi quy Tuyến tính và PCA là một phương pháp cực kỳ hiệu quả để xử
+    lý vấn đề này.
+
+**Cần xử lý:**
+
+-   Kiểm tra sâu hơn các giá trị ngoại lai
+-   Chuẩn hóa các biến
+-   Kiểm tra có tồn tại dữ liệu khuyết không
+
+## 3.2. Kiểm tra dữ liệu khuyết
+
+```{r}
+# Kiểm tra số lượng giá trị khuyết theo từng biến:
+colSums(is.na(data))
+```
+
+Dữ liệu không bị khuyết bất kỳ giá trị nào nên ta sẽ không cần phải xử
+lý dữ liệu khuyết.
+
+## 3.3. Kiểm tra giá trị ngoại lai
+
+```{r}
+# Gắn rowid để theo dõi dòng
+data_with_id = data %>%
+  mutate(rowid = row_number())
+
+# Kiểm tra outlier
+# Xác định outlier đơn biến
+univ_outliers = list()
+
+for (i in names(data_housing)) {
+  (out = data_with_id %>%
+    identify_outliers(all_of(i)) %>%
+    filter(is.extreme == TRUE) %>%
+    select(rowid))
+  
+  if (nrow(out) > 0) {
+    univ_outliers[[i]] = out
+  }
+}
+
+# Lưu lại các id là extreme outlier (1 chiều)
+univ_extremes = bind_rows(univ_outliers) %>% distinct()
+
+# In ra các quan trắc là extreme outlier (1 chiều)
+outlier_rows = data_with_id %>%
+  filter(rowid %in% univ_extremes$rowid)
+
+# Số lượng extreme outlier 1 chiều
+dim(outlier_rows)
+```
+
+```{r}
+# Outlier đa biến
+multi_extremes = data_with_id %>%
+  select(-CHAS, -MEDV)  %>%
+  mahalanobis_distance() %>%
+  filter(is.outlier == TRUE) %>%
+  select(rowid) 
+
+# In ra các quan trắc là extreme outlier (nhiều chiều)
+outlier_rows = data_with_id %>%
+  filter(rowid %in% multi_extremes$rowid)
+
+# Số lượng extreme outlier nhiều chiều
+dim(outlier_rows)
+```
+
+```{r}
+# Hợp nhất các quan trắc là extreme outlier (cả nhiều và 1 chiều)
+extreme_ids = bind_rows(univ_extremes, multi_extremes) %>% distinct()
+
+# Trích toàn bộ dòng extreme
+all_extremes = data_with_id %>%
+  semi_join(extreme_ids, by = "rowid") %>%
+  select(-rowid)
+
+# Số lượng extreme outlier tổng cộng
+dim(all_extremes)
+```
+
+**Nhận xét:**
+
+-   Sau khi kiểm tra ta thấy có tổng cộng 129 quan trắc là ngoại lai cực
+    đoan - extreme outlier. Các quan trắc này chiếm khoảng 25.49% lượng
+    dữ liệu và có thể làm lệch các phân tích sau này của ta nên dù mất
+    khá nhiều quan trắc nhưng ta vẫn sẽ loại bỏ chúng.
+
+```{r}
+# Loại bỏ các extreme outlier
+data_clean = data_with_id %>%
+  anti_join(extreme_ids, by = "rowid") %>%
+  select(-rowid)
+
+data_housing_clean = data_clean %>% select(-CHAS, -MEDV)
+
+# Số chiều của dữ liệu sau khi loại bỏ
+dim(data_clean)
+```
+
+## 3.4. Chuẩn hóa dữ liệu
+
+```{r}
+# Chuẩn hóa
+data_scaled = scale(data_housing_clean)
+data_scaled = as.data.frame(data_scaled)
+boxplot(data_scaled,
+        las = 2,
+        main = "Boxplot sau khi loại bỏ các ngoại lai cực đoan và chuẩn hóa")
+```
+
+**Nhận xét:**
+
+Sau khi loại bỏ các giá trị ngoại lai cực đoan và chuẩn hóa, ta thấy các
+biến đã có khoảng giá trị gần nhau và phân phối đã gần chuẩn hơn, không
+còn bị lệch quá nặng như trước.
+
+## 3.5. Tạo biến mục tiêu mới
+
+Bởi vì biến mục tiêu `MEDV` của bộ dữ liệu là biến số liên tục - phù hợp
+với bài toán hồi quy. Tuy nhiên, ta muốn phân tích bộ dữ liệu bằng phân
+tích thành phần chính và tìm hiểu thành phần chính/biến đặc trưng nào có
+thể chẩn đoán tốt giá nhà nên ta sẽ tạo biến mới là biến phân loại
+`MEDV_cat` dựa trên `MEDV`. Biến phân loại sẽ giúp ta dễ trực quan hóa
+để phân tích các xu hướng, ý nghĩa hơn.
+
+\*Lưu ý: Cách chia mỗi nhóm tùy thuộc vào mục đích và cách thức phân
+tích, nghiên cứu. Trong trường hợp này, ta sử dụng phương pháp chia theo
+tứ phân vị của biến `MEDV`:
+
+-   Nhóm giá thấp - `low`: MEDV nhỏ hơn Q1 (tứ phân vị thứ nhất)
+-   Nhóm giá trung bình - `medium`: MEDV nằm giữa Q1 và Q3
+-   Nhóm giá cao - `high`: MEDV lớn hơn Q3 (tứ phân vị thứ ba)
+
+```{r}
+# Tính các tứ phân vị
+Q1 = quantile(data_clean$MEDV, 0.25)
+Q3 = quantile(data_clean$MEDV, 0.75)
+
+# Tạo biến phân loại MEDV_cat
+data_clean$MEDV_cat <- cut(
+  data_clean$MEDV,
+  breaks = c(-Inf, Q1, Q3, Inf),
+  labels = c("low", "medium", "high"),
+  right = TRUE,  # Bao gồm giới hạn bên phải (<=)
+  include.lowest = TRUE
+)
+
+# Kiểm tra phân bố lớp MEDV_cat
+mdev_cat_distribution = table(data_clean$MEDV_cat)
+print(mdev_cat_distribution)
+```
+
+# 4. Phân tích thành phần chính
+
+## 4.1. Số lượng thành phần chính giữ lại
+
+```{r}
+# Xây dựng các thành phần chính
+pca = princomp(data_scaled)
+summary(pca)
+```
+
+```{r}
+# Các trị riêng của từng thành phần chính
+(eigenvalues = (pca$sdev)^2)
+```
+
+```{r}
+# Scree plot
+factoextra::fviz_eig(pca, addlabels = TRUE, ylim = c(0, 50))
+```
+
+```{r}
+var = factoextra::get_pca_var(pca)
+corrplot::corrplot(var$cos2, is.corr=FALSE)
+```
+
+**Nhận xét:**
+
+Ta sẽ phân tích cần phải giữ lại bao nhiêu thành phần chính để giữ lại
+phần lớn lượng dữ liệu theo các tiêu chuẩn:
+
+-   Tỉ lệ phương sai tích lũy: Nếu đặt mốc chấp nhận được là 70% thì ta
+    cần phải giữ lại 3 thành phần chính đầu tiên (giải thích được 70.35%
+    phương sai suy rộng).
+-   Kaiser: Ta giữ lại 3 thành phần chính đầu tiên vì chỉ có chúng là có
+    trị riêng \> 1.
+-   Phương pháp khuỷu tay với Scree plot: Khuỷu tay nằm ở thành phần
+    chính thứ 2, nên ta chỉ giữ lại 2 thành phần chính đầu tiên. Tuy
+    nhiên, với cách chọn này, ta chỉ giữ lại được 58.5% phương sai suy
+    rộng - là gần một nửa lượng thông tin ban đầu của dữ liệu.
+-   Đầy đủ thông tin về các biến: Nếu ta muốn phân tích hoặc có thêm
+    nhiều thông tin từ biến B, ta có thể cân nhắc giữ lại 4-5 thành phần
+    chính đầu tiên vì chỉ có thành phần chính thứ 4 và thứ 5 là giải
+    thích tốt cho biến B.
+
+==\> Ta chọn theo tỉ lệ phương sai tích lũy, giữ lại 3 thành phần chính
+đầu tiên cho các phân tích sau.
+
+## 4.2. Ý nghĩa của các thành phần chính
+
+```{r}
+pca$loadings
+```
+
+```{r}
+var = factoextra::get_pca_var(pca)
+corrplot::corrplot(var$cos2, is.corr=FALSE)
+```
+
+**Nhận xét:**
+
+Từ ma trận loading và đồ thị trên, ta có thể rút được ý nghĩa như sau:
+
+-   Thành phần chính 1: Có độ lớn trọng số các biến CRIM, INDUS, NOX,
+    AGE, DIS, RAD, TAX và LSTAT đáng quan tâm. Với việc các biến này
+    giải thích tốt cho thành phần chính 1 thì thành phần này có thể đại
+    diện cho "Chỉ số đô thị hóa và chất lượng khu vực sống", vì những
+    biến này đều liên quan đến môi trường đô thị hóa, hạ tầng, và điều
+    kiện sống thấp. Nghĩa là PC1 càng cao → có thể là khu vực tội phạm
+    cao, đất công nghiệp nhiều (không phải đất ở), công trình nhiều năm
+    tuổi, ô nhiễm không khí, thuế cao, và dân cư tầng lớp thấp.
+
+-   Thành phần chính 2: Có độ lớn trọng số các biến RM và LSTAT tương
+    đối đáng quan tâm. Với việc các biến này giải thích tốt cho thành
+    phần chính 2 thì thành phần này có thể đại diện cho "Điều kiện nhà
+    ở", do các yếu tố trên liên quan đến số phòng trong căn nhà và tỉ lệ
+    dân cư tầng lớp thấp, đồng thời hệ số loading của chúng cũng ngược
+    dấu với nhau (RM: 0.588 và LSTAT: -0.436). Nghĩa là PC2 càng cao →
+    điều kiện sống càng cao, nhà nhiều phòng, to hơn, càng ít dân thu
+    nhập thấp hơn.
+
+-   Thành phần chính 3: Có độ lớn trọng số biến PTRATIO, AGE, DIS và RAD
+    đáng quan tâm. Với việc các biến này giải thích tốt cho thành phần
+    chính 3 thì thành phần này có thể đại diện cho "Giáo dục và xã hội",
+    vì những biến này liên quan đến tỷ lệ học sinh/giảng viên, tuổi của
+    nhà, khoảng cách tới các trung tâm việc làm và tỷ lệ tiếp cận đường
+    cao tốc với các hệ số loading: PTRATIO: 0.52, AGE: -0.38, DIS:
+    0.407, RAD: 0.335. Nghĩa là PC3 càng cao → điều kiện được học tập
+    càng cao, nhà có tuổi thọ nhỏ hơn, xa trung tâm hơn nhưng dễ dàng
+    tiếp cận đường cao tốc.
+
+-   Thành phần chính 4 và 5: Có các trọng số khá giống nhau và chỉ khác
+    biệt nhỏ về độ lớn. Cụ thể, 2 thành phần chính này có độ lớn trọng
+    số các biến B và ZN đáng quan tâm. Với việc các biến này giải thích
+    tốt cho thành phần chính 4 và 5 thì 2 thành phần này có thể là "Tỷ
+    lệ của người da màu và quy hoạch đất", do các yếu tố trên liên quan
+    đến tỷ lệ người da màu và tỷ lệ đất ở quy hoạch cho lô lớn.
+
+```{r}
+fviz_pca_var(pca,
+             select.var = list(contrib = 10),
+             col.var = "contrib",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE
+)
+```
+
+**Nhận xét:**
+
+-   Từ biểu đồ biplot, ta thấy có các biến TAX, CRIM, NOX, INDUS, RAD,
+    DIS, AGE và LSTAT đóng góp rất nhiều vào thành phần chính đầu tiên.
+    Hai biến ZN và RM tuy đóng góp ít hơn nhưng cũng được mức khá.
+
+-   Ngoài ra, ta thấy thành phần chính đầu tiên có thể mang ý nghĩa
+    giống với phân tích ở trên là "Chỉ số đô thị hóa và chất lượng khu
+    vực sống", vì các biến có đóng góp lớn vào thành phần này đều liên
+    quan tới môi trường đô thị hóa, hạ tầng, điều kiện sống thấp và
+    chúng đều có hướng dương (chỉ trừ DIS). Điều này nghĩa là PC1 càng
+    tăng → khu vực tội phạm cao, tỷ lệ đất công nghiệp cao, công trình
+    nhiều năm tuổi, ô nhiễm không khí, thuế cao, dân cư tầng lớp thấp
+    nhiều và xa các trung tâm việc làm.
+
+-   Thành phần chính thứ hai chỉ có biến RM và LSTAT có đóng góp nhiều,
+    các biến ZN và RAD có đóng góp vừa phải còn lại đều đóng góp khá ít.
+
+-   Tương tự ở trên, thành phần chính thứ hai cũng mang ý nghĩa khá
+    giống với phân tích ở trên khi mang ý nghĩa "Điều kiện nhà ở", vì
+    các biến có đóng góp lớn vào thành phần chính này liên quan đến số
+    phòng, tỉ lệ quy hoạch đất ở cho lô lớn, tỉ lệ tiếp cận đường cao
+    tốc và tỉ lệ dân cư tầng lớp thấp. Nghĩa là PC2 càng cao → điều kiện
+    sống càng cao, nhà nhiều phòng, đất ở cũng lớn hơn và dễ tiếp cận
+    đường cao tốc hơn.
+
+-   Biến B gần như không đóng góp vào cả 2 thành phần chính đầu tiên,
+    điều này là đúng với phân tích ở trên khi thành phần chính thứ 4 và
+    5 mới giải thích tốt cho biến B.
+
+```{r}
+pca_scores = pca$scores
+
+# Đồ thị scores
+plot(pca_scores, xlab = "PC 1 (34.5%)", ylab = "PC 2 (14.7%)", main = "Đồ thị Scores")
+abline(h = 0, v = 0, col = "gray")
+text(pca_scores[, 1] + 0.2, pca_scores[, 2], label = rownames(data_scaled), col="blue", cex=0.6)
+```
+
+## 4.3. Nhóm theo MEDV_cat
+
+```{r}
+library(ggfortify)
+autoplot(pca, loadings = FALSE, frame = TRUE, frame.type = "norm",
+         colour = "MEDV_cat", data = data_clean, 
+         main = "Biểu đồ score cho PC1 và PC2") +
+  geom_vline(xintercept = 0, color = "gray") +
+  geom_hline(yintercept = 0, color = "gray") +
+  theme_minimal()
+```
+
+**Nhận xét:**
+
+-   Từ đồ thị phân tán, chúng ta có thể thấy rằng phần lớn các khu vực
+    có giá nhà cao (high) có giá trị của thành phần chính thứ nhất thấp
+    hơn so với phần lớn các khu vực có giá nhà thấp (low). Do đó, thành
+    phần chính thứ nhất có khả năng tách tương đối các mẫu khu vực giá
+    nhà cao với mẫu khu vực giá nhà thấp.
+
+-   Thành phần chính thứ hai khó có thể tự tách biệt các mẫu của ba khu
+    vực với nhau. Tuy nhiên, khi kết hợp với thành phần chính thứ nhất
+    sẽ giúp tăng khả năng tách biệt các nhóm khu vực, cụ thể:
+
+    -   Nhóm khu vực giá nhà cao (high): Tập trung nhiều ở góc trái trên
+        (PC1 \< 0, PC2 \> 0).
+    -   Nhóm khu vực giá nhà thấp (low): Tập trung nhiều ở phía phải
+        (PC1 \> 0), càng về phía bên phải và xuống dướ (PC1 \> 0, PC2 \<
+        0)  thì càng tách biệt rõ với nhóm khu vực giá nhà vừa phải
+            (medium).
+
+-   Các khu vực có giá nhà vừa phải (medium) chồng lấn lên cả hai nhóm
+    còn lại dẫn tới khó phân biệt hoàn toàn dù có kết hợp cả hai thành
+    phần chính đầu tiên.
+
+-   Ngoài ra, ta thấy các nhóm khu vực có giá nhà từ thấp đến cao có
+    phân bố các mẫu chuyển dịch từ góc phải dưới lên dần góc trái trên.
+    Nghĩa là, các khu vực có giá nhà càng cao thì càng tỉ lệ thuận với
+    RM, ZN và tỉ lệ nghịch với LSTAT, TAX, CRIM, NOX, INDUS, RAD, AGE.
+    Tức là các khu vực có giá nhà càng cao thì số phòng càng nhiều, tỷ
+    lệ quy hoạch đất ở theo lô lớn càng cao và tỷ lệ dân cư tầng lớp
+    thấp, thuế, tệ nạn, ô nhiễm... càng thấp. Ngược lại, các khu vực có
+    giá nhà càng thấp thì tỷ lệ dân cư tầng lớp thấp, thuế, tệ nạn, ô
+    nhiễm... càng cao và số phòng, tỷ lệ đất theo lô lớn càng giảm.
+
+```{r}
+autoplot(pca, x = 1, y = 3, loadings = FALSE, frame = TRUE, frame.type = "norm",
+         colour = "MEDV_cat", data = data_clean, 
+         main = "Biểu đồ score cho PC1 và PC3") +
+  geom_vline(xintercept = 0, color = "gray") +
+  geom_hline(yintercept = 0, color = "gray") +
+  theme_minimal()
+```
+
+**Nhận xét:**
+
+Từ đồ thị phân tán hiển thị thành phần chính đầu tiên trên trục hoành và
+thành phần chính thứ ba trên trục tung, ta có thể thấy khả năng tách
+biệt các nhóm khu vực theo giá nhà còn tệ hơn cả khi kết hợp thành phần
+chính thứ nhất và thành phần chính thứ hai (thậm chí là không thể phân
+tách được giá của khu vực nào do chồng lấn quá nhiều). Do đó, thành phần
+chính thứ ba không có khả năng tách các mẫu khu vực theo giá nhà.
+
+## 4.4. Nhóm theo CHAS
+
+```{r}
+autoplot(pca, loadings = FALSE,
+         colour = "CHAS", data = data_clean, 
+         main = "Biểu đồ score cho PC1 và PC2") +
+  geom_vline(xintercept = 0, color = "gray") +
+  geom_hline(yintercept = 0, color = "gray") +
+  theme_minimal()
+```
+
+**Nhận xét:**
+
+Từ đồ thị phân tán, ta có thể thấy khả năng tách biệt các nhóm khu vực
+theo biến CHAS - có giáp sông Charles hay không - rất tệ khi cả hai lớp
+0 và 1 đều phân bố ngẫu nhiên quan hai trục là hai thành phần chính đầu
+tiên. Do đó, hai thành phần chính đầu tiên không có khả năng tách các
+mẫu khu vực theo việc giáp sông Charles.
+
+# 5. Thử các phương pháp khác
+
+## 5.1. Phân tích nhân tố
+
+```{r}
+fa = factanal(data_scaled, factors = 5, rotation = "none")
+fa
+```
+
+```{r}
+fa_max = factanal(data_scaled, factors = 5, rotation = "varimax")
+fa_max
+```
+
+**Nhận xét:**
+
+1.  Về kiểm định hợp lý: Trong kiểm định tính hợp lý của mô hình nhân tố
+    với giả thuyết:
+
+-   H0: Mô hình 5 nhân tố là phù hợp
+-   H1: Mô hình 5 nhân tố là không phù hợp
+
+Với mức ý nghĩa alpha = 0.001 (0.1%), thì do p-value = 0.00998 \> 0.001
+nên ta chấp nhận H0: Mô hình 5 nhân tố là phù hợp. Vậy mô hình 5 nhân tố
+là phù hợp với mức ý nghĩa 0.001.
+
+2.  Về Uniquenesses: Nhìn vào Uniquenesses (phương sai riêng biệt của
+    từng biến, tức là phần không được giải thích bởi các nhân tố chung),
+    ta thấy:
+
+-   Các biến được các nhân tố giải thích rất tốt (gần 0): CRIM, INDUS,
+    NOX, AGE, DIS, RAD, TAX, PTRATIO, LSTAT
+
+-   Các biến được các nhân tố giải thích ở mức chấp nhận được (\~0.3 -
+    0.5): ZN, RM
+
+-   Các biến hầu như không liên quan đến các nhân tố (\>0.5): B
+
+3.  Về tỷ lệ phương sai giữ lại: Khi giữ lại 5 nhân tố thì mô hình giải
+    thích được khoảng 73.3% phương sai suy rộng của dữ liệu.
+
+4.  Về phép quay nhân tố: Ta thấy sau khi quay trực giao, các trọng số
+    tải đã trở nên phân nhóm rõ ràng, giúp dễ giải thích ý nghĩa của
+    từng nhân tố. Đây chính là hiệu quả mong muốn từ phép quay này.
+
+5.  Về trọng số loading: Từ ma trận loading, ta có:
+
+-   Nhân tố đầu tiên, F1, đại diện cho mức độ phát triển đô thị và cơ sở
+    hạ tầng. Các biến có hệ số lớn gồm RAD (0.961), TAX (0.853), và CRIM
+    (0.825), cho thấy nhân tố này phản ánh khu vực có mật độ nút giao
+    thông lớn, thuế cao, và tình hình an ninh phức tạp – thường gắn với
+    khu vực đô thị hóa cao.
+
+-   Nhân tố thứ hai, F2, đại diện cho mức độ phát triển công nghiệp và
+    dân cư. Biến nổi bật gồm AGE (0.794), NOX (0.687), INDUS (0.515), và
+    DIS (-0.814). Nhân tố này mô tả khu vực có nhiều nhà cổ, mức độ ô
+    nhiễm không khí cao, tỷ lệ đất công nghiệp cao (ít đất ở hơn), đồng
+    thời cách xa trung tâm, ám chỉ khu dân cư lâu đời và gắn với khu
+    công nghiệp.
+
+-   Nhân tố thứ ba, F3, gần như là nhân tố chuyên biệt đại diện cho điều
+    kiện kinh tế - xã hội, khi biến LSTAT (0.890) có hệ số rất lớn. Đây
+    là tỷ lệ dân nghèo, nên nhân tố này phản ánh tình trạng kinh tế - xã
+    hội thấp.
+
+-   Nhân tố thứ tư, F4, gần như là nhân tố chuyên biệt đại diện cho chất
+    lượng giáo dục, với hệ số PTRATIO (0.879) rất lớn. Do PTRATIO là tỷ
+    lệ học sinh trên giáo viên, nhân tố này đại diện cho chất lượng
+    trường học tại khu vực (tỷ lệ càng cao thì chất lượng thường thấp
+    hơn).
+
+-   Nhân tố thứ năm, F5, không có biến nào có hệ số lớn, hầu như chỉ bổ
+    sung ý nghĩa và góp phần giải thích thêm phương sai suy rộng. Nếu
+    phải nêu ý nghĩa thì có thể nhân tố này đại diện cho đặc điểm khu
+    công nghiệp và môi trường sống, thể hiện qua các biến INDUS (0.441)
+    và NOX (0.339), tỷ lệ càng cao thì càng nhiều đất công nghiệp và ô
+    nhiễm.
+
+```{r}
+# Lấy ma trận loadings từ mô hình xoay Varimax
+loadings_matrix <- fa$loadings
+
+factor_loadings <- data.frame(
+  Indicator = c("CRIM", "ZN", "INDUS", "NOX", "RM", "AGE", "DIS", "RAD", "TAX", "PTRATIO", "B", "LSTAT"),
+  F1 = loadings_matrix[, 1],
+  F2 = loadings_matrix[, 2]
+)
+
+# Vẽ biểu đồ vector các loadings
+ggplot(factor_loadings, aes(x = F1, y = F2, label = Indicator)) +
+  geom_segment(aes(x = 0, y = 0, xend = F1, yend = F2), 
+               color = "blue", 
+               arrow = arrow(length = unit(0.2, "cm"), type = "closed")) +
+  geom_text_repel(color = "#E74C3C", size = 5) +
+  xlim(-1, 1) + ylim(-1, 1) +
+  theme_minimal(base_size = 14) +
+  ggtitle("Factor Loadings Map (No Rotation)") +
+  xlab("Factor 1") + ylab("Factor 2")
+
+
+# Lấy ma trận loadings từ mô hình xoay Varimax
+loadings_matrix <- fa_max$loadings
+
+factor_loadings <- data.frame(
+  Indicator = c("CRIM", "ZN", "INDUS", "NOX", "RM", "AGE", "DIS", "RAD", "TAX", "PTRATIO", "B", "LSTAT"),
+  F1 = loadings_matrix[, 1],
+  F2 = loadings_matrix[, 2]
+)
+
+# Vẽ biểu đồ vector các loadings
+ggplot(factor_loadings, aes(x = F1, y = F2, label = Indicator)) +
+  geom_segment(aes(x = 0, y = 0, xend = F1, yend = F2), 
+               color = "blue", 
+               arrow = arrow(length = unit(0.2, "cm"), type = "closed")) +
+  geom_text_repel(color = "#E74C3C", size = 5) +
+  xlim(-1, 1) + ylim(-1, 1) +
+  theme_minimal(base_size = 14) +
+  ggtitle("Factor Loadings Map (Varimax Rotation)") +
+  xlab("Factor 1") + ylab("Factor 2")
+```
+
+Từ hình vẽ ta thấy phép quay varimax thực sự giúp tăng khả năng giải
+thích và đơn giản hóa việc hiểu và đặt tên cho các nhân tố tiềm ẩn.
+
+```{r}
+# Chạy lại phân tích nhân tố nhưng thêm scores
+fa_clus = factanal(data_scaled, factors = 5, rotation = "varimax", scores = "regression")
+
+# Trích xuất factor scores
+scores <- as.data.frame(fa_clus$scores)
+colnames(scores) <- c("F1", "F2", "F3", "F4", "F5")
+
+scores$Group = data_clean$MEDV_cat
+
+# Vẽ đồ thị phân tán theo nhân tố 1 và 2
+ggplot(scores, aes(x = F1, y = F2, color = Group)) +
+  geom_point(alpha = 0.7, size = 3) +
+  labs(
+    title = "Phân tách Nhóm theo nhân tố 1 - F1 và nhân tố 2 - F2",
+    x = "F1",
+    y = "F2 "
+  ) +
+  theme_minimal() +
+  scale_color_brewer(palette = "Set1") +
+  stat_ellipse(level = 0.95)  # Vẽ ellipse bao quanh nhóm
+```
+
+```{r}
+ggpairs(
+  data = scores,
+  columns = 1:5,  # Chọn nhân tố F1-F3
+  mapping = aes(color = Group),
+  upper = list(continuous = "density"),
+  lower = list(continuous = "points")
+)
+```
+
+**Kết luận:**
+
+-   Với việc giữ lại tới 5 nhân tố nhưng tổng tỷ lệ phương sai giải
+    thích được của mô hình nhân tố chỉ là khoảng 73.3%, cao hơn chỉ
+    khoảng 3% so với việc giữ lại 3 thành phần chính đầu tiên khi phân
+    tích thành phần chính (70.35%).
+
+-   Ngoài ra, khi trực quan hóa để quan sát khả năng phân tách các nhóm
+    giá nhà dựa theo các nhân tố thì ta thấy khả năng phân tách của các
+    nhân tố đều kém hơn so với các thành phần chính.
+
+==\> Như vậy, để phân tách các nhóm giá nhà tốt hơn, đồng thời hiệu quả
+lưu giữ phương sai suy rộng cao hơn thì ta nên chọn phân tích thành phần
+chính thay vì phân tích nhân tố.
+
+# 6. Xây dựng mô hình với các Thành phần chính
+
+```{r}
+data_housing_clean$MEDV = data_clean$MEDV
+
+model_raw = lm(MEDV ~ CRIM + ZN + INDUS + NOX + RM + AGE + DIS + RAD + TAX + PTRATIO + B + LSTAT, data = data_housing_clean)
+summary(model_raw)
+```
+
+```{r}
+par(mfrow = c(2, 2))
+plot(model_raw)
+```
+
+```{r}
+vif(model_raw)
+```
+
+```{r}
+pca_data = as.data.frame(pca$scores)
+pca_data$MEDV = data_clean$MEDV
+
+model_pca = lm(MEDV ~ Comp.1 + Comp.2 + Comp.3 + Comp.4, data = pca_data)
+summary(model_pca)
+```
+
+```{r}
+par(mfrow = c(2, 2))
+plot(model_pca)
+```
+
+```{r}
+vif(model_pca)
+```
+
+**Nhận xét:**
+
+> Trong phần này, mục tiêu chính là đánh giá **hiệu quả mà PCA mang
+> lại** khi được áp dụng vào mô hình Hồi quy Tuyến tính. Do đó, ta
+> **không đi sâu vào phân tích chi tiết kết quả của từng mô hình riêng
+> lẻ**, mà thay vào đó tập trung vào việc so sánh tổng thể giữa mô hình
+> gốc và mô hình sau khi áp dụng PCA. Việc so sánh này nhằm chỉ ra:
+>
+> \- **Mức độ tương đồng về kết quả dự đoán** giữa hai mô hình
+>
+> \- **Những lợi ích** mà PCA mang lại
+>
+> \- Và **cái giá phải trả** khi sử dụng PCA
+>
+> Mục tiêu cuối cùng là rút ra nhận định về **tính hiệu quả và tính đánh
+> đổi** của PCA trong bối cảnh áp dụng cho Hồi quy Tuyến tính.
+
+Trong phần này, ta tiến hành so sánh hai mô hình hồi quy tuyến
+tính:
+
+-   **Mô hình Biến gốc:** Sử dụng trực tiếp 13 biến giải thích ban đầu
+    trong bộ dữ liệu (`CRIM`, `ZN`, ..., `LSTAT`).
+-   **Mô hình PCA:** Sử dụng 4 thành phần chính đầu tiên thu được từ
+    Phân tích Thành phần Chính (PCA) trên tập biến đầu vào.
+
+#### 1. Độ phù hợp mô hình
+
+| Tiêu chí                  | Mô hình Biến gốc     | Mô hình PCA         |
+|---------------------------|----------------------|---------------------|
+| Residual Std. Error (RSE) | 4.71                 | 4.924               |
+| R-squared                 | 0.7091               | 0.675               |
+| Adjusted R-squared        | 0.6995               | 0.6716              |
+| F-statistic               | 73.95 (df = 12, 364) | 193.2 (df = 4, 372) |
+| VIF                       | RAD (9.708872), TAX (8.824253), CRIM (4.907609)  | Tất cả bằng 1 |
+
+-   Mô hình biến gốc có R-squared và Adjusted R-squared cao hơn, cho
+    thấy khả năng giải thích phương sai trong `MEDV` tốt hơn.
+-   Mô hình PCA có RSE cao hơn một chút (4.924 so với 4.71), cho thấy
+    sai số dự đoán trung bình lớn hơn.
+-   Tuy nhiên, F-statistic của mô hình PCA rất lớn (193.2) và vẫn có ý
+    nghĩa thống kê cao, cho thấy các thành phần chính vẫn là những biến
+    dự báo mạnh.
+-   VIF của các biến RAD, TAX rất cao và CRIM khá cao cho thấy mô hình biến gốc bị đa cộng tuyến. Trong khi mô hình PCA hoàn toàn không bị vấn đề này.
+
+------------------------------------------------------------------------
+
+#### 2. Ý nghĩa các biến
+
+-   **Mô hình biến gốc:** Một số biến có ý nghĩa thống kê cao (`RM`,
+    `LSTAT`, `PTRATIO`, `DIS`, `NOX`...), nhưng cũng có nhiều biến không
+    có ý nghĩa rõ rệt (`CRIM`, `ZN`, `AGE`, `B`...).
+-   **Mô hình PCA:** Cả 4 thành phần chính đều có ý nghĩa thống kê rất
+    cao (p \< 0.001). Tuy nhiên, do đây là các biến tổng hợp, **việc
+    giải thích cụ thể ảnh hưởng trực tiếp của từng biến ban đầu sẽ khó
+    khăn hơn.**
+
+------------------------------------------------------------------------
+
+#### 3. Sự đánh đổi
+
+| Tiêu chí                   | Mô hình Biến gốc | Mô hình PCA                    |
+|--------------------------|-----------------------|------------------------|
+| **Độ chính xác mô hình**   | Nhỉnh hơn        | Kém hơn một chút               |
+| **Giải thích từng biến**   | Rõ ràng, dễ hiểu | Khó giải thích (biến tổng hợp) |
+| **Vấn đề đa cộng tuyến**   | Bị đa cộng tuyến | Được giải quyết hoàn toàn      |
+| **Số chiều (biến)**        | 13               | 4                              |
+| **Tính đơn giản, ổn định** | Phức tạp hơn     | Đơn giản, ổn định hơn          |
+
+------------------------------------------------------------------------
+
+#### 4. Kết luận
+
+Việc sử dụng PCA giúp giảm số chiều từ 13 xuống còn 4, loại bỏ hoàn toàn
+vấn đề **đa cộng tuyến**, đồng thời các thành phần chính đều có ý nghĩa
+thống kê cao. Tuy nhiên, mô hình biến gốc vẫn có **độ chính xác cao
+hơn** về mặt R² và RSE, và quan trọng hơn, **cho phép giải thích rõ ràng
+ảnh hưởng của từng yếu tố đầu vào** đến biến mục tiêu `MEDV`.
+
+Tùy theo mục tiêu sử dụng, ta sẽ chọn mô hình phù hợp:
+
+-   Nếu mục tiêu là **dự báo chính xác và giải
+thích rõ các yếu tố ảnh hưởng**, mô hình biến gốc là lựa chọn phù hợp
+hơn tuy nhiên cần phải kết hợp các phương pháp khác để khắc phục vấn đề đa cộng tuyến.
+-   Nếu mục tiêu là **giảm chiều dữ liệu, tăng tính ổn định và chống
+đa cộng tuyến**, mô hình PCA là lựa chọn hợp lý, chấp nhận đánh đổi một
+phần độ chính xác.
+
+Ngoài ra, nhìn vào 4 biểu đồ chẩn đoán từ 2 mô hình hồi quy tuyến tính ta thấy trong biểu đồ Residuals vs Fitted đường cong đỏ nhếch lên ở 2 đầu cho thấy mối quan hệ phi tuyến giữa biến độc lập và biến phụ thuộc. Vì vậy, với bộ dữ liệu này có thể chọn mô hình khác có khả năng giải thích được quan hệ phi tuyến sẽ phù hợp hơn.
+
+
+# 7. Phương pháp có thể tốt hơn
+
+Ta có các phương pháp hiện đại hơn tùy thuộc vào loại dữ liệu:
+
+-   Dữ liệu phi tuyến: UMAP, t-SNE, Autoencoders
+-   Dữ liệu lớn: UMAP, Sparse PCA 
+-   Trực quan hóa: t-SNE
+
+## 8. Kết luận
+
+Dựa trên các mục tiêu đặt ra, phân tích thành phần chính (PCA) trên bộ dữ liệu Boston Housing mang lại các kết quả chính như sau:
+
+-   **Xử lý dữ liệu đầu vào**: Dữ liệu đã được kiểm tra, không còn giá trị khuyết hay ngoại lai cực đoan, đảm bảo tính ổn định và độ tin cậy của phân tích PCA.
+
+-   **Giảm chiều dữ liệu**: PCA đã rút gọn từ 13 biến ban đầu xuống còn 3 thành phần chính (PC1, PC2, PC3), đồng thời vẫn giữ lại **70.35% phương sai** của toàn bộ dữ liệu.
+
+-   **Phân nhóm giá nhà**: Sau khi chia biến mục tiêu `MEDV` thành 3 nhóm giá (thấp, vừa, cao), biểu đồ phân bố trên không gian PC1-PC2 cho thấy **xu hướng phân tách khá rõ ràng**, đặc biệt giữa nhóm giá thấp và nhóm giá cao. Nhóm giá vừa có chồng lấn nhưng vẫn cho thấy phần nào sự khác biệt.
+
+-   **Ý nghĩa các thành phần chính**:
+    -   **PC1**: đại diện cho Chỉ số đô thị hóa và chất lượng khu vực sống (do ảnh hưởng bởi các biến như CRIM, NOX, INDUS, TAX, LSTAT...).
+    -   **PC2**: phản ánh Điều kiện nhà ở, nổi bật là số phòng trung bình (RM) và tỷ lệ dân cư thu nhập thấp (LSTAT).
+
+-   **So sánh với FA**: PCA và FA giữ phương sai tương đương (FA giữ 73.3%), nhưng **PCA thể hiện rõ hơn khả năng phân nhóm giá nhà**, do đó phù hợp hơn với mục tiêu đề ra.
+
+-   **Các đặc trưng quan trọng nhất** giúp phân biệt nhóm giá nhà gồm:
+    -   `RM` (số phòng): tăng → giá nhà tăng.
+    -   `LSTAT` (tỷ lệ dân cư thu nhập thấp): tăng → giá nhà giảm.
+    -   Các biến như `CRIM`, `NOX`, `INDUS`, `RAD`, `TAX` cũng góp phần phản ánh mức độ đô thị hóa và môi trường sống.
+  
+-   **Hiệu quả của PCA khi sử dụng cho mô hình:** Giúp giảm đa cộng tuyến, giảm chiều dữ liệu (nếu quá lớn) từ đó loại bỏ phần nào nhiễu và các biến không quan trọng. Với dữ liệu gọn hơn, ít nhiễu hơn thì mô hình sẽ học nhanh hơn, ổn định hơn và tổng quát hóa tốt hơn. Một số mô hình (như KNN, clustering, SVM) có thể hoạt động hiệu quả hơn khi dữ liệu được giảm chiều đúng cách.
+
+Kết luận: **PCA là phương pháp phù hợp để giảm chiều dữ liệu và hỗ trợ chẩn đoán giá nhà hiệu quả với bộ dữ liệu Boston Housing này**.
